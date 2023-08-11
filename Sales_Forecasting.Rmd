@@ -16,7 +16,7 @@ library(forecast)   # Essential time series forecasting tools.
 2nd: we will import our file.
 ```{r}
 # Define the path to the sales data file.
-file <- "/Users/alb/Documents/GitHub/kaggle_sales_sample.csv"
+file <- "your_file_path.csv"
 
 # Check file extension and read in the data accordingly.
 ifelse(tools::file_ext(file) == "xlsx", 
