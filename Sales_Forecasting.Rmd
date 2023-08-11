@@ -1,0 +1,131 @@
+---
+output: reprex::reprex_document
+Title: Forecasting Weighted Averages for Dave
+Date: 03/02/2023
+knit: reprex::reprex_render
+---
+1st: we will load libraries.
+```{r}
+library(readxl)     # Provides functions to read Excel files.
+library(dplyr)      # Essential data manipulation functions.
+library(lubridate)  # Functions to work with date-times.
+library(zoo)        # Contains as.Date() function for irregular time series.
+library(forecast)   # Essential time series forecasting tools.
+```
+
+2nd: we will import our file.
+```{r}
+# Define the path to the sales data file.
+file <- "/Users/alb/Documents/GitHub/kaggle_sales_sample.csv"
+
+# Check file extension and read in the data accordingly.
+ifelse(tools::file_ext(file) == "xlsx", 
+       data <- readxl::read_excel(file),
+       data <- read.csv(file))
+```
+
+Optional, view data.
+```{r}
+View(data)
+```
+
+3rd: we will aggregate sales data by quarter.
+```{r}
+quarterly_sales <- data %>%
+  group_by(
+    quarter = quarter(as.Date(paste(YEAR_ID, QTR_ID, "01", sep = "-"))),
+    year = year(as.Date(paste(YEAR_ID, QTR_ID, "01", sep = "-")))
+  ) %>%
+  summarize(sales = sum(SALES))
+```
+
+4th: we will create a time series, and a train and validation set.
+```{r}
+sales.ts <- ts(quarterly_sales$sales,
+               start = c(min(quarterly_sales$year), 1),
+               frequency = 4)
+
+# Define the validation set as the last 20% of the data.
+nValid <- ceiling(0.2 * length(sales.ts))
+nTrain <- length(sales.ts) - nValid
+train.ts <- window(sales.ts, end = c(tail(quarterly_sales$year, n = 1), nTrain))
+valid.ts <- window(sales.ts, start = c(tail(quarterly_sales$year, n = 1), nTrain + 1))
+```
+
+5th: we will forecast the time series with different models, and select the best model.
+```{r}
+# Train multiple time series models.
+auto_arima <- auto.arima(train.ts)
+tslm <- tslm(train.ts ~ trend + season, lambda = 1)
+auto_ets <- ets(train.ts, model = 'ZZZ')
+
+# Forecast using the trained models.
+auto_arima_fc <- forecast(auto_arima, h = nValid) 
+tslm_fc <- forecast(tslm, h = nValid)
+auto_ets_fc <- forecast(auto_ets, h = nValid)
+
+# Evaluate forecast accuracy.
+acc_auto_arima <- accuracy(auto_arima_fc, valid.ts) 
+acc_tslm <- accuracy(tslm_fc, valid.ts) 
+acc_auto_ets <- accuracy(auto_ets_fc, valid.ts) 
+
+# Select the best model based on Root Mean Squared Error (RMSE).
+if (acc_auto_arima["Test set", "RMSE"] < acc_tslm["Test set", "RMSE"] && acc_auto_arima["Test set", "RMSE"] < acc_auto_ets["Test set", "RMSE"]) {
+  best_model <- auto_arima
+} else if (acc_tslm["Test set", "RMSE"] < acc_auto_arima["Test set", "RMSE"] && acc_tslm["Test set", "RMSE"] < acc_auto_ets["Test set", "RMSE"]) {
+  best_model <- tslm
+} else {
+  best_model <- auto_ets
+}
+```
+
+Optional, check model fit.
+```{r}
+summary(best_model)
+```
+
+6th: Take the best model, and train with full data set.
+```{r}
+if (class(best_model)[1] == "Arima") {
+  model <- auto.arima(sales.ts)
+} else if (class(best_model)[1] == "lm") {
+  model <- tslm(sales.ts ~ trend + season, lambda = 1)
+} else {
+  model <- ets(sales.ts, model = 'ZZZ')
+}
+```
+
+7th: we will make a probability density function with the forecast.
+```{r}
+fc <- forecast(model)
+pdf <- density(fc$mean)
+```
+
+Optional, view pdf plot.
+```{r}
+plot(pdf, ylab = "Probability Density", xlab = "Sales in $", main = "Forecasted PDF of Sales")
+```
+
+8th: We will take our pdf and calculate the weighted averages of each region
+```{r}
+# Define intervals corresponding to different sales regions.
+intervals <- list(c(0, 0.1), c(0.1, 0.4), c(0.4, 0.6), c(0.6, 0.9), c(0.9, 1))
+weighted_average <- numeric(length(intervals))
+
+# Function to calculate weighted average within a specified interval.
+weighted.mean.interval <- function(pdf, interval) {
+  prob <- diff(pmax(0, pmin(interval, pdf$x))) / diff(range(pdf$x))
+  wtd_avg <- sum(prob * pdf$y[pmax(1, match(interval[1], pdf$x)):pmin(length(pdf$x), match(interval[2], pdf$x))])
+  return(wtd_avg)
+}
+
+# Compute weighted averages for each interval.
+for (i in seq_along(intervals)) {
+  weighted_average[i] <- weighted.mean.interval(pdf, intervals[[i]])
+}
+
+# View the results.
+col_names <- c("0-10%", "10-40%", "40-60%", "60-90%", "90-100%")
+weighted_average <- setNames(weighted_average, col_names)
+weighted_average
+```
